@@ -1,12 +1,13 @@
 from hashlib import sha256
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models import PlatformVariant, PublishAttempt, PublishDelivery, ScheduleSlot, utcnow
-from app.publishers.base import PublisherError, PublishRequest
+from app.models import PlatformVariant, PublishAttempt, PublishDelivery, ScheduleSlot, SourcePost, utcnow
+from app.publishers.base import PublisherError, PublishImage, PublishRequest
 from app.publishers.registry import PublisherRegistry
+from app.services.image_storage import storage_path
 
 
 class DeliveryInProgress(RuntimeError):
@@ -14,7 +15,10 @@ class DeliveryInProgress(RuntimeError):
 
 
 class PublishFailed(RuntimeError):
-    pass
+    def __init__(self, message, *, retryable=True, outcome_uncertain=False):
+        super().__init__(message)
+        self.retryable = retryable
+        self.outcome_uncertain = outcome_uncertain
 
 
 def make_idempotency_key(variant_id: int, schedule_slot_id: int) -> str:
@@ -36,6 +40,8 @@ def delivery_payload(delivery: PublishDelivery, already_published: bool = False)
         "created_at": delivery.created_at,
         "completed_at": delivery.completed_at,
         "already_published": already_published,
+        "image_attached": delivery.image_key_snapshot is not None,
+        "stage": (delivery.provider_state or {}).get("stage"),
     }
 
 
@@ -51,17 +57,24 @@ async def publish_scheduled_variant(
         return delivery_payload(delivery, already_published=True)
     if delivery and delivery.status == "processing":
         raise DeliveryInProgress("This publishing operation is already in progress")
+    if delivery and delivery.error_message and delivery.error_message.startswith("Outcome uncertain"):
+        raise PublishFailed(delivery.error_message, retryable=False, outcome_uncertain=True)
 
     if delivery:
-        delivery.status = "processing"
-        delivery.attempt_count += 1
-        delivery.error_message = None
+        changed = db.execute(update(PublishDelivery).where(PublishDelivery.id == delivery.id,
+            PublishDelivery.status == "failed", PublishDelivery.attempt_count == delivery.attempt_count)
+            .values(status="processing", attempt_count=delivery.attempt_count + 1, error_message=None))
+        if changed.rowcount != 1:
+            db.rollback()
+            raise DeliveryInProgress("This publishing operation is already in progress")
     else:
         delivery = PublishDelivery(
             schedule_slot_id=schedule.id,
             platform=variant.platform,
             idempotency_key=key,
             content_snapshot=variant.content,
+            image_key_snapshot=schedule.image_key_snapshot,
+            image_sha256_snapshot=schedule.image_sha256_snapshot,
         )
         db.add(delivery)
     try:
@@ -78,30 +91,51 @@ async def publish_scheduled_variant(
     db.commit()
     db.refresh(attempt)
 
+    def save_provider_state(state):
+        delivery.provider_state = dict(state)
+        db.commit()
+
     try:
-        result = await registry.get(variant.platform).publish(
-            PublishRequest(content=variant.content, idempotency_key=key)
+        image = None
+        if delivery.image_key_snapshot:
+            try:
+                raw = storage_path(delivery.image_key_snapshot).read_bytes()
+            except (OSError, ValueError) as exc:
+                raise PublisherError("Scheduled image is missing; restore it before retrying", retryable=False) from exc
+            if delivery.image_sha256_snapshot and sha256(raw).hexdigest() != delivery.image_sha256_snapshot:
+                raise PublisherError("Scheduled image changed since approval; publishing stopped", retryable=False)
+            image = PublishImage(content=raw, filename=f"post-{variant.id}-{variant.platform}.png")
+        publisher = registry.get(variant.platform)
+        if image and not publisher.supports_images:
+            raise PublisherError("This publisher cannot deliver images; publishing stopped", retryable=False)
+        result = await publisher.publish(
+            PublishRequest(content=delivery.content_snapshot, idempotency_key=key, image=image,
+                           owner_user_id=db.scalar(select(SourcePost.owner_id).where(SourcePost.id == variant.source_post_id)),
+                           provider_state=dict(delivery.provider_state or {}), save_state=save_provider_state,
+                           destination_account_id=schedule.destination_account_id)
         )
     except PublisherError as exc:
-        safe_error = str(exc)
+        safe_error = ("Outcome uncertain; manual reconciliation required: " if exc.outcome_uncertain else "") + str(exc)
         delivery.status = "failed"
         delivery.error_message = safe_error[:500]
         delivery.completed_at = utcnow()
-        attempt.status = "failed"
+        attempt.status = "uncertain" if exc.outcome_uncertain else "failed"
         attempt.error_message = safe_error[:500]
         attempt.completed_at = utcnow()
         db.commit()
-        raise PublishFailed(safe_error) from exc
+        raise PublishFailed(safe_error, retryable=exc.retryable and not exc.outcome_uncertain,
+                            outcome_uncertain=exc.outcome_uncertain) from exc
     except Exception as exc:
-        safe_error = "Publisher failed unexpectedly"
+        uncertain = delivery.platform == "instagram" and (delivery.provider_state or {}).get("stage") in {"publishing", "published"}
+        safe_error = ("Outcome uncertain; manual reconciliation required: " if uncertain else "") + "Publisher failed unexpectedly"
         delivery.status = "failed"
         delivery.error_message = safe_error
         delivery.completed_at = utcnow()
-        attempt.status = "failed"
+        attempt.status = "uncertain" if uncertain else "failed"
         attempt.error_message = safe_error
         attempt.completed_at = utcnow()
         db.commit()
-        raise PublishFailed(safe_error) from exc
+        raise PublishFailed(safe_error, retryable=not uncertain, outcome_uncertain=uncertain) from exc
 
     delivery.status = "succeeded"
     delivery.external_post_id = result.external_post_id

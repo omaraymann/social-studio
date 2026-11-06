@@ -14,12 +14,14 @@ from app.services.publishing import PublishFailed, publish_scheduled_variant
 logger = logging.getLogger("social_studio.worker")
 
 
-def recover_expired_leases(db: Session, now: datetime):
+def recover_expired_leases(db: Session, now: datetime, platform: str | None = None):
+    platform_filter = [ScheduleSlot.variant_id.in_(select(PlatformVariant.id).where(PlatformVariant.platform == platform))] if platform else []
     stale = db.scalars(
         select(ScheduleSlot).where(
             ScheduleSlot.status == "processing",
             ScheduleSlot.lease_expires_at.is_not(None),
             ScheduleSlot.lease_expires_at <= now,
+            *platform_filter,
         )
     ).all()
     for schedule in stale:
@@ -30,7 +32,11 @@ def recover_expired_leases(db: Session, now: datetime):
                 .where(PublishAttempt.delivery_id == delivery.id, PublishAttempt.status == "processing")
                 .order_by(PublishAttempt.attempt_number.desc())
             )
-            if delivery.platform == "discord":
+            state = delivery.provider_state or {}
+            resumable_instagram = delivery.platform == "instagram" and (
+                state.get("stage") in {"creating_container", "processing_image", "container_failed"}
+                or (state.get("stage") == "published" and state.get("media_id")))
+            if delivery.platform not in {"x", "linkedin"} and not resumable_instagram:
                 message = "Outcome uncertain after worker lease expired; manual reconciliation required"
                 delivery.status = "failed"
                 delivery.error_message = message
@@ -41,7 +47,7 @@ def recover_expired_leases(db: Session, now: datetime):
                     attempt.error_message = message
                     attempt.completed_at = now
             else:
-                message = "Worker lease expired before completion; safe mock retry scheduled"
+                message = "Worker lease expired before completion; safe checkpoint retry scheduled" if resumable_instagram else "Worker lease expired before completion; safe mock retry scheduled"
                 delivery.status = "failed"
                 delivery.error_message = message
                 schedule.status = "pending"
@@ -61,13 +67,15 @@ def recover_expired_leases(db: Session, now: datetime):
     db.commit()
 
 
-def claim_due_schedule(db: Session, worker_id: str, now: datetime) -> int | None:
+def claim_due_schedule(db: Session, worker_id: str, now: datetime, platform: str | None = None) -> int | None:
+    platform_filter = [ScheduleSlot.variant_id.in_(select(PlatformVariant.id).where(PlatformVariant.platform == platform))] if platform else []
     schedule = db.scalar(
         select(ScheduleSlot)
         .where(
             ScheduleSlot.status == "pending",
             ScheduleSlot.publish_at <= now,
             or_(ScheduleSlot.next_attempt_at.is_(None), ScheduleSlot.next_attempt_at <= now),
+            *platform_filter,
         )
         .order_by(ScheduleSlot.publish_at, ScheduleSlot.id)
         .with_for_update(skip_locked=True)
@@ -78,7 +86,9 @@ def claim_due_schedule(db: Session, worker_id: str, now: datetime) -> int | None
     schedule.status = "processing"
     schedule.worker_id = worker_id
     schedule.claimed_at = now
-    schedule.lease_expires_at = now + timedelta(seconds=settings.worker_lease_seconds)
+    variant = db.get(PlatformVariant, schedule.variant_id)
+    lease_seconds = max(settings.worker_lease_seconds, 240) if variant.platform == "instagram" else settings.worker_lease_seconds
+    schedule.lease_expires_at = now + timedelta(seconds=lease_seconds)
     db.commit()
     return schedule.id
 
@@ -102,7 +112,7 @@ async def process_claimed_schedule(db: Session, schedule_id: int, registry: Publ
         schedule.worker_id = None
         schedule.claimed_at = None
         schedule.lease_expires_at = None
-        if attempts < settings.max_publish_attempts:
+        if exc.retryable and attempts < settings.max_publish_attempts:
             delay = settings.retry_base_seconds * (2 ** (attempts - 1))
             schedule.status = "pending"
             schedule.next_attempt_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
@@ -112,12 +122,12 @@ async def process_claimed_schedule(db: Session, schedule_id: int, registry: Publ
         db.commit()
 
 
-async def run_once(registry: PublisherRegistry = publisher_registry, worker_id: str | None = None) -> bool:
+async def run_once(registry: PublisherRegistry = publisher_registry, worker_id: str | None = None, platform: str | None = None) -> bool:
     worker_id = worker_id or f"worker-{uuid.uuid4().hex[:12]}"
     now = datetime.now(timezone.utc)
     with SessionLocal() as db:
-        recover_expired_leases(db, now)
-        schedule_id = claim_due_schedule(db, worker_id, now)
+        recover_expired_leases(db, now, platform)
+        schedule_id = claim_due_schedule(db, worker_id, now, platform)
     if schedule_id is None:
         return False
     with SessionLocal() as db:

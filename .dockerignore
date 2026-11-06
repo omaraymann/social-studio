@@ -8,3 +8,14 @@ __pycache__
 tests
 frontend/node_modules
 frontend/dist
+# Private uploads, datasets, downloaded models, and experiment caches.
+# Runtime media is supplied through the existing persistent bind mount.
+data
+rag/data/raw
+rag/data/processed
+rag/data/results
+.env.*
+!.env.example
+**/tokens.json
+**/credentials.json
+**/client_secret*.json

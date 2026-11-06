@@ -49,6 +49,14 @@ class PlatformVariant(Base):
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    selected_visual_id: Mapped[int | None] = mapped_column(ForeignKey("campaign_visuals.id", ondelete="SET NULL"), nullable=True)
+    selected_image_key: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    selected_image_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    image_required: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+
+    @property
+    def image_attached(self):
+        return self.selected_image_key is not None
 
 
 class GenerationRun(Base):
@@ -80,6 +88,8 @@ class GenerationRun(Base):
     rag_top_k: Mapped[int | None] = mapped_column(Integer, nullable=True)
     rag_model_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
     rag_context: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    rag_min_similarity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reference_image_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="processing")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -94,6 +104,8 @@ class ScheduleSlot(Base):
     )
     id: Mapped[int] = mapped_column(primary_key=True)
     variant_id: Mapped[int] = mapped_column(ForeignKey("platform_variants.id", ondelete="CASCADE"), index=True)
+    destination_account_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    destination_account_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     publish_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     status: Mapped[str] = mapped_column(String(30), default="pending")
     next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
@@ -102,6 +114,12 @@ class ScheduleSlot(Base):
     worker_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    image_key_snapshot: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    image_sha256_snapshot: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    @property
+    def image_attached(self):
+        return self.image_key_snapshot is not None
 
 
 class PublishDelivery(Base):
@@ -116,6 +134,7 @@ class PublishDelivery(Base):
     platform: Mapped[str] = mapped_column(String(30))
     idempotency_key: Mapped[str] = mapped_column(String(64))
     content_snapshot: Mapped[str] = mapped_column(Text)
+    provider_state: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="processing")
     attempt_count: Mapped[int] = mapped_column(default=1)
     external_post_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -123,6 +142,8 @@ class PublishDelivery(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    image_key_snapshot: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    image_sha256_snapshot: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class PublishAttempt(Base):
@@ -141,6 +162,37 @@ class PublishAttempt(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class InstagramConnection(Base):
+    __tablename__ = "instagram_connections"
+    __table_args__ = (
+        Index("uq_instagram_connected_account", "instagram_user_id", unique=True,
+              sqlite_where=text("status = 'active'"), postgresql_where=text("status = 'active'")),
+        CheckConstraint("status IN ('active', 'disconnected', 'expired', 'needs_reconnect')", name="ck_instagram_connection_status"),
+    )
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    instagram_user_id: Mapped[str] = mapped_column(String(100))
+    username: Mapped[str] = mapped_column(String(100))
+    encrypted_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="active")
+    scopes: Mapped[list] = mapped_column(JSON, default=list)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    token_issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class InstagramOAuthAttempt(Base):
+    __tablename__ = "instagram_oauth_attempts"
+    state_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    browser_hash: Mapped[str] = mapped_column(String(64))
+    redirect_uri: Mapped[str] = mapped_column(String(2048))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelled: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class FactCheck(Base):
@@ -192,3 +244,50 @@ class RevisionSuggestion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CampaignImage(Base):
+    __tablename__ = "campaign_images"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_post_id: Mapped[int] = mapped_column(ForeignKey("source_posts.id", ondelete="CASCADE"), index=True)
+    filename: Mapped[str] = mapped_column(String(300))
+    reference_role: Mapped[str] = mapped_column(String(20), default='product', server_default='product')
+    original_key: Mapped[str] = mapped_column(String(200))
+    prepared_key: Mapped[str] = mapped_column(String(200))
+    width: Mapped[int] = mapped_column(Integer)
+    height: Mapped[int] = mapped_column(Integer)
+    original_width: Mapped[int] = mapped_column(Integer)
+    original_height: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class CampaignVisual(Base):
+    __tablename__ = "campaign_visuals"
+    __table_args__ = (
+        CheckConstraint("status IN ('queued', 'processing', 'succeeded', 'failed')", name="ck_campaign_visuals_status"),
+        Index("uq_campaign_visuals_active_post", "source_post_id", "platform", unique=True,
+              sqlite_where=text("status IN ('queued', 'processing')"),
+              postgresql_where=text("status IN ('queued', 'processing')")),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_post_id: Mapped[int] = mapped_column(ForeignKey("source_posts.id", ondelete="CASCADE"), index=True)
+    platform: Mapped[str] = mapped_column(String(30), default="campaign", server_default="campaign")
+    vision_model: Mapped[str] = mapped_column(String(150))
+    image_model: Mapped[str] = mapped_column(String(150))
+    aspect_ratio: Mapped[str] = mapped_column(String(10))
+    style: Mapped[str] = mapped_column(String(100))
+    reference_image_ids: Mapped[list] = mapped_column(JSON)
+    context: Mapped[dict] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(30), default="queued")
+    step: Mapped[str] = mapped_column(String(30), default="queued")
+    headline: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    call_to_action: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    visual_brief: Mapped[str | None] = mapped_column(Text, nullable=True)
+    image_key: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    usage: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import math
 from threading import Lock
 
 import numpy as np
@@ -111,10 +112,13 @@ def embed_query(text: str) -> np.ndarray:
         )[0]
 
 
-def search_user_chunks(connection, owner_id: int, query: str, document_ids: list[str] | None = None, top_k: int = 5) -> list[dict]:
+def search_user_chunks(connection, owner_id: int, query: str, document_ids: list[str] | None = None,
+                       top_k: int = 5, min_similarity: float = 0.70) -> list[dict]:
     """Search only the authenticated user's collection and the platform model version."""
     if not 1 <= top_k <= 10:
         raise ValueError("top_k must be between 1 and 10")
+    if not math.isfinite(min_similarity) or not 0 <= min_similarity <= 1:
+        raise ValueError("min_similarity must be between 0 and 1")
     dataset = f"social_studio_user_{owner_id}"
     vector = "[" + ",".join(str(float(value)) for value in embed_query(query)) + "]"
     with connection.cursor() as cursor:
@@ -137,5 +141,5 @@ def search_user_chunks(connection, owner_id: int, query: str, document_ids: list
     return [
         {"document_id": row[0], "title": row[1], "chunk_index": row[2], "text": row[3],
          "similarity": float(row[4]), "source_url": row[5]}
-        for row in rows
+        for row in rows if math.isfinite(float(row[4])) and float(row[4]) >= min_similarity
     ]

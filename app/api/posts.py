@@ -1,7 +1,7 @@
 import hashlib
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -9,7 +9,9 @@ from app.core.security import current_user
 from app.database import get_db
 from app.llm.base import LLMError, LLMProvider
 from app.llm.registry import get_llm_provider
-from app.models import GenerationRun, PlatformVariant, SourcePost, User
+from app.models import CampaignVisual, GenerationRun, PlatformVariant, SourcePost, User
+from app.llm.vision import IMAGE_MODELS, IMAGE_REFERENCE_LIMITS
+from app.services.campaign_visuals import process_visual, selected_references
 from app.schemas import GenerationRunOut, GenerateVariants, SourcePostCreate, SourcePostOut, VariantOut
 from app.services.ingestion import fetch_article
 from app.services.llm_generation import generate_llm_variants
@@ -64,18 +66,33 @@ def list_generations(post_id: int, user: User = Depends(current_user), db: Sessi
 async def create_variants(
     payload: GenerateVariants,
     post_id: int,
+    background_tasks: BackgroundTasks,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
     llm_provider: LLMProvider = Depends(get_llm_provider),
 ):
     post = owned_post(post_id, user, db)
+    if payload.generate_images and len(set(payload.reference_image_ids)) > IMAGE_REFERENCE_LIMITS[payload.image_model]:
+        raise HTTPException(422, f"{IMAGE_MODELS[payload.image_model]} accepts at most {IMAGE_REFERENCE_LIMITS[payload.image_model]} reference photos")
+    if payload.reference_image_ids:
+        try:
+            selected_references(db, post_id, payload.reference_image_ids)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
     existing = set(db.scalars(select(PlatformVariant.platform).where(PlatformVariant.source_post_id == post.id)).all())
     requested = list(dict.fromkeys(payload.platforms))
     if existing.intersection(requested):
         raise HTTPException(status_code=409, detail="A variant already exists for one or more requested platforms")
     if payload.generation_mode == "llm":
         try:
-            return await generate_llm_variants(db, post, payload, llm_provider)
+            variants = await generate_llm_variants(db, post, payload, llm_provider)
+            if payload.generate_images:
+                queued = db.scalars(select(CampaignVisual).where(
+                    CampaignVisual.source_post_id == post.id, CampaignVisual.status == "queued",
+                    CampaignVisual.platform.in_(requested))).all()
+                for visual in queued:
+                    background_tasks.add_task(process_visual, visual.id)
+            return variants
         except LLMError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
     variants = []

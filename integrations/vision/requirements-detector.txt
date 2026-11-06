@@ -1,0 +1,2 @@
+# Optional local detector; use alongside the existing project/integration dependencies.
+ultralytics==8.4.183

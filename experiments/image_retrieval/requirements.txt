@@ -1,0 +1,8 @@
+# Install in an optional experiment environment, not the backend environment.
+open_clip_torch==3.3.0
+transformers==5.19.0
+torch==2.14.1
+torchvision==0.29.1
+Pillow==12.3.0
+numpy==2.5.4
+huggingface-hub==1.33.0

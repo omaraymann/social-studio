@@ -13,3 +13,5 @@ python-multipart==0.0.20
 sentence-transformers==6.1.0
 PyMuPDF==1.26.4
 psutil==7.0.0
+Pillow==12.3.0
+cryptography==50.0.2

@@ -11,6 +11,7 @@ class PlatformProfile:
 
 
 PROFILES = {
+    "instagram": PlatformProfile(max_characters=2200, max_hashtags=5, tone="friendly", forbidden_tone_terms=()),
     "x": PlatformProfile(max_characters=280, max_hashtags=3, tone="concise", forbidden_tone_terms=()),
     "linkedin": PlatformProfile(
         max_characters=3000,
@@ -56,6 +57,9 @@ def generate_variant(platform: str, title: str, source: str, source_url: str | N
         summary = " ".join(points)
         link = f"\n\nRead more: {source_url}" if source_url else ""
         return f"**{title}**\n\n{summary}{link}\n\nWhat do you think?"
+
+    if platform == "instagram":
+        return f"{title}\n\n{' '.join(sentences[:2])}\n\nLearn more. #ProductUpdate"[:2200]
 
     points = sentences[:3] or [normalized_source]
     bullet_list = "\n".join(f"- {point}" for point in points)

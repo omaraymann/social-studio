@@ -1,4 +1,5 @@
 .env
+.DS_Store
 .venv/
 __pycache__/
 *.py[cod]
@@ -20,3 +21,23 @@ rag/data/results/**/per_query_metrics.csv
 rag/data/results/plots/retrieval_plots.zip
 rag/data/results/**/*.json
 rag/data/results/**/revision.txt
+
+# Product image samples and download caches stay local.
+data/product_images/abo/images/
+data/product_images/abo/cache/
+data/product_images/abo/contact_sheet.jpg
+data/campaign_images/
+
+# Local public-image detection pilot and annotations.
+data/vision/detection_pilot/
+
+# Local attributed Drive upload copies and checkpoints.
+data/drive_documents/
+data/vision/matched_campaigns/
+data/drive_sync/
+
+# Standalone image retrieval data, weights, and local benchmark outputs.
+data/image_retrieval/
+
+# User photo-library files stay private and local.
+data/image_library/

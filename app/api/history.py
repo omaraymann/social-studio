@@ -77,7 +77,7 @@ def retry_failed_schedule(schedule_id: int, user: User = Depends(current_user), 
     if schedule.status != "failed":
         raise HTTPException(status_code=409, detail="Only failed schedules can be retried")
     if schedule.last_error and schedule.last_error.startswith("Outcome uncertain"):
-        raise HTTPException(status_code=409, detail="Uncertain Discord delivery requires manual reconciliation")
+        raise HTTPException(status_code=409, detail="Uncertain delivery requires manual reconciliation")
     schedule.status = "pending"
     schedule.next_attempt_at = datetime.now(timezone.utc)
     schedule.last_error = None

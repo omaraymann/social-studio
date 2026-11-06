@@ -5,6 +5,8 @@ from app.publishers.base import PublishRequest, PublishResult, SocialPublisher
 
 class MockPublisher(SocialPublisher):
     platform: str
+    mode = "mock"
+    supports_images = True
 
     async def publish(self, request: PublishRequest) -> PublishResult:
         stable_id = sha256(f"{self.platform}:{request.idempotency_key}".encode()).hexdigest()[:16]

@@ -20,6 +20,7 @@ class RetrievalRequest(BaseModel):
     query: str = Field(min_length=3, max_length=20_000)
     document_ids: list[str] = Field(default_factory=list, max_length=100)
     top_k: int = Field(default=5, ge=1, le=10)
+    min_similarity: float = Field(default=0.70, ge=0, le=1)
 
 
 def _db_error(exc: Exception):
@@ -85,7 +86,9 @@ def retrieve(request: RetrievalRequest, user: User = Depends(current_user)):
     try:
         with connect_rag_database(settings.rag_db_password) as connection:
             ensure_studio_tables(connection)
-            rows = search_user_chunks(connection, user.id, request.query, request.document_ids, request.top_k)
+            rows = search_user_chunks(connection, user.id, request.query, request.document_ids,
+                                      request.top_k, request.min_similarity)
     except Exception as exc:
         raise _db_error(exc) from exc
-    return {"chunks": rows, "model": "BAAI/bge-small-en-v1.5", "top_k": request.top_k}
+    return {"chunks": rows, "model": "BAAI/bge-small-en-v1.5", "top_k": request.top_k,
+            "min_similarity": request.min_similarity, "source_only_fallback": not rows}

@@ -2,6 +2,7 @@ from enum import Enum
 
 from app.models import PlatformVariant, utcnow
 from app.services.variants import validate_variant
+from app.services.post_media import ensure_media_ready
 
 
 class VariantStatus(str, Enum):
@@ -47,6 +48,7 @@ def edit_variant(variant: PlatformVariant, content: str):
 
 
 def approve_variant(variant: PlatformVariant):
+    ensure_media_ready(variant)
     if variant.fact_recheck_required:
         raise InvalidStatusTransition("Recheck facts before approving an AI-edited draft")
     validate_variant(variant.platform, variant.content)

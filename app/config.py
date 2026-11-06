@@ -11,6 +11,17 @@ class Settings(BaseSettings):
     url_fetch_timeout_seconds: float = 10
     url_fetch_max_bytes: int = 2_000_000
     discord_webhook_url: str | None = None
+    instagram_access_token: str | None = None
+    instagram_user_id: str | None = None
+    instagram_owner_user_id: int | None = None
+    instagram_username: str | None = None
+    instagram_api_version: str = "v25.0"
+    instagram_app_id: str | None = None
+    instagram_app_secret: str | None = None
+    instagram_redirect_uri: str | None = None
+    instagram_token_encryption_key: str | None = None
+    frontend_base_url: str = "http://localhost:5173"
+    public_media_base_url: str | None = None
     worker_poll_seconds: float = 2
     worker_lease_seconds: int = 30
     max_publish_attempts: int = 3
@@ -29,6 +40,8 @@ class Settings(BaseSettings):
     rag_db_password: str | None = None
     rag_db_host: str = "127.0.0.1"
     rag_db_port: int = 5433
+    image_storage_dir: str = "data/campaign_images"
+    image_timeout_seconds: float = 120
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

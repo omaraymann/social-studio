@@ -12,6 +12,11 @@ from app.services.publishing import DeliveryInProgress, PublishFailed, publish_s
 router = APIRouter(prefix="/schedules", tags=["publishing"])
 
 
+@router.get("/publishers")
+def publishers(user: User = Depends(current_user), registry: PublisherRegistry = Depends(get_publisher_registry)):
+    return registry.capabilities(user.id)
+
+
 @router.post("/{schedule_id}/publish", response_model=DeliveryOut)
 async def publish_schedule(
     schedule_id: int,
@@ -39,4 +44,9 @@ async def publish_schedule(
     except LookupError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except PublishFailed as exc:
+        schedule.status = "failed"
+        schedule.last_error = str(exc)
+        schedule.next_attempt_at = None
+        schedule.lease_expires_at = None
+        db.commit()
         raise HTTPException(status_code=502, detail=f"Publishing failed: {exc}")

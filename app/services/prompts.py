@@ -4,6 +4,7 @@ PROMPT_VERSION = "social-v2"
 EXAMPLES_VERSION = "few-shot-v1"
 
 EXAMPLES = {
+    "instagram": "A new space to collaborate: shared folders are available in the desktop beta. Invite up to five collaborators. Explore the update. #ProductUpdate",
     "x": "Quick take: Reliable pipelines recover safely instead of silently losing work. #DataEngineering",
     "linkedin": (
         "Reliable data pipelines are designed for recovery.\n\n"
